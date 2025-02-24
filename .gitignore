@@ -12,11 +12,34 @@ node_modules
 # They should be uploaded to GitHub releases instead.
 main.js
 
-# Exclude sourcemaps
-*.map
-
 # obsidian
 data.json
 
 # Exclude macOS Finder (System Explorer) View States
 .DS_Store
+
+# Ignore all versions of main except main.ts
+main.*
+!main.ts
+
+# Ignore node_modules and dependency lock files
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# Ignore editor and OS-specific files
+*.log
+*.tmp
+*.swp
+*.swo
+Thumbs.db
+ehthumbs.db
+
+# Ignore build and distribution files
+dist/
+build/
+*.map
+*.d.ts
+*.js
+*.js.map
