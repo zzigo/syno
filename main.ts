@@ -3,7 +3,7 @@ import { createSin } from "./components/sin";
 import { createTri } from "./components/tri";
 import { createSaw } from "./components/saw";
 import { createSqr } from "./components/sqr";
-import { createNoise } from "./components/noise"; // New component
+import { createNoise } from "./components/noise";
 import { applyVol } from "./components/vol";
 import { applyPan } from "./components/pan";
 import { applyChop } from "./components/chop";
@@ -34,9 +34,9 @@ export interface PanRamp extends Ramp {
 
 export default class SynoPlugin extends Plugin {
     private audioContext: AudioContext | null = null;
-    private activeNodes: { osc: OscillatorNode; gain: GainNode; pan?: StereoPannerNode; interval?: NodeJS.Timeout; started?: boolean }[] = [];
+    private activeNodes: { osc: OscillatorNode | AudioBufferSourceNode; gain: GainNode; pan?: StereoPannerNode; interval?: NodeJS.Timeout; started?: boolean }[] = [];
     private masterGain: GainNode | null = null;
-    private timers: { id: number; startTime: number; duration: number; interval: NodeJS.Timeout }[] = [];
+    private timers: { id: number; startTime: number; duration: number }[] = [];
     private nextTimerId = 1;
 
     async onload() {
@@ -80,15 +80,15 @@ export default class SynoPlugin extends Plugin {
 
         const controlsDiv = container.createDiv({ cls: "syno-controls" });
         controlsDiv.style.display = "flex";
-        controlsDiv.style.justifyContent = "flex-end";
+        controlsDiv.style.justifyContent = "space-between";
         controlsDiv.style.alignItems = "center";
         controlsDiv.style.marginTop = "4px";
 
-        const vuMeter = controlsDiv.createEl("span", { text: "", cls: "syno-vumeter" });
-        vuMeter.style.marginRight = "6px";
-
         const playButton = controlsDiv.createEl("span", { text: "▷", cls: "syno-play-button" }) as HTMLElement;
         playButton.style.cursor = "pointer";
+
+        const vuMeter = controlsDiv.createEl("span", { text: "", cls: "syno-vumeter" });
+        vuMeter.style.marginLeft = "6px";
 
         let isPlaying = false;
 
@@ -126,7 +126,8 @@ export default class SynoPlugin extends Plugin {
             const parts = line.split(".");
             const waveType = parts[0].match(/(sin|tri|saw|sqr|noise)/)?.[0];
             const freqOrNoise = parseFloat(parts[0].match(/\d+(?:\.\d+)?/)![0] || "440");
-            let osc: OscillatorNode;
+            let osc: OscillatorNode | AudioBufferSourceNode;
+            let isNoise = false;
             switch (waveType) {
                 case "tri":
                     osc = createTri(freqOrNoise, this.audioContext);
@@ -139,6 +140,7 @@ export default class SynoPlugin extends Plugin {
                     break;
                 case "noise":
                     osc = createNoise(freqOrNoise, this.audioContext);
+                    isNoise = true;
                     break;
                 case "sin":
                 default:
@@ -154,7 +156,7 @@ export default class SynoPlugin extends Plugin {
 
             for (let i = 1; i < parts.length; i++) {
                 const part = parts[i];
-                if (part.startsWith("gliss")) {
+                if (part.startsWith("gliss") && !isNoise && "frequency" in osc) {
                     const glissMatch = part.match(/gliss\((-?\d+(?:\.\d+)?),(\d+)s(?:,(linear|exp|target))?\)/);
                     if (glissMatch) {
                         const ramp: Ramp = {
@@ -178,7 +180,7 @@ export default class SynoPlugin extends Plugin {
                                 osc.frequency.linearRampToValueAtTime(ramp.end, endTime);
                                 break;
                         }
-                        this.addTimer(ramp.duration, vuMeter);
+                        this.addTimer(ramp.duration);
                         if (ramp.duration > lineMaxDuration) lineMaxDuration = ramp.duration;
                     }
                 } else if (part.startsWith("vol")) {
@@ -192,7 +194,7 @@ export default class SynoPlugin extends Plugin {
                         } : parseFloat(volMatch[1]);
                         console.log(`Applying vol: ${JSON.stringify(vol)}`);
                         buffer = applyVol(buffer, this.audioContext, vol);
-                        if (typeof vol !== "number") this.addTimer(vol.duration, vuMeter);
+                        if (typeof vol !== "number") this.addTimer(vol.duration);
                         if (typeof vol !== "number" && vol.duration > lineMaxDuration) lineMaxDuration = vol.duration;
                     }
                 } else if (part.startsWith("pan")) {
@@ -206,7 +208,7 @@ export default class SynoPlugin extends Plugin {
                         } : parseFloat(panMatch[1]);
                         console.log(`Applying pan: ${JSON.stringify(pan)}`);
                         buffer = applyPan(buffer, this.audioContext, pan);
-                        if (typeof pan !== "number") this.addTimer(pan.duration, vuMeter);
+                        if (typeof pan !== "number") this.addTimer(pan.duration);
                         if (typeof pan !== "number" && pan.duration > lineMaxDuration) lineMaxDuration = pan.duration;
                     }
                 } else if (part.startsWith("chop")) {
@@ -237,6 +239,7 @@ export default class SynoPlugin extends Plugin {
             if (!this.audioContext || this.activeNodes.length === 0) {
                 clearInterval(interval);
                 vuMeter.textContent = "";
+                playButton.textContent = "▷";
                 return;
             }
 
@@ -261,8 +264,9 @@ export default class SynoPlugin extends Plugin {
             const leftChar = avgLeft === 0 ? "" : chars[Math.floor(avgLeft * (chars.length - 1))];
             const rightChar = avgRight === 0 ? "" : chars[Math.floor(avgRight * (chars.length - 1))];
 
+            this.timers = this.timers.filter(t => (this.audioContext!.currentTime - t.startTime) < t.duration);
             const timerDisplay = this.timers
-                .map(t => Math.floor((this.audioContext!.currentTime - t.startTime)))
+                .map(t => Math.floor(this.audioContext!.currentTime - t.startTime))
                 .reverse()
                 .slice(0, 5)
                 .join(" ");
@@ -272,15 +276,11 @@ export default class SynoPlugin extends Plugin {
         playButton.textContent = "■";
     }
 
-    private addTimer(duration: number, vuMeter: HTMLElement) {
+    private addTimer(duration: number) {
         if (this.timers.length >= 5) return; // Max 5 timers
         const id = this.nextTimerId++;
         const startTime = this.audioContext!.currentTime;
-        const interval = setTimeout(() => {
-            this.timers = this.timers.filter(t => t.id !== id);
-            clearInterval(interval);
-        }, duration * 1000);
-        this.timers.push({ id, startTime, duration, interval });
+        this.timers.push({ id, startTime, duration });
     }
 
     private async stopSound(vuMeter: HTMLElement, playButton: HTMLElement) {
@@ -302,7 +302,6 @@ export default class SynoPlugin extends Plugin {
             }
         });
         this.activeNodes = [];
-        this.timers.forEach(t => clearInterval(t.interval));
         this.timers = [];
         if (this.masterGain) {
             this.masterGain.disconnect();

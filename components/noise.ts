@@ -1,4 +1,4 @@
-export function createNoise(x: number, ctx: AudioContext): OscillatorNode {
+export function createNoise(x: number, ctx: AudioContext): AudioBufferSourceNode {
     const bufferSize = 2 * ctx.sampleRate; // 2 seconds of noise
     const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const data = noiseBuffer.getChannelData(0);
@@ -33,6 +33,5 @@ export function createNoise(x: number, ctx: AudioContext): OscillatorNode {
     }
 
     filter.connect(ctx.destination); // Will be reconnected in main.ts
-    noiseSource.start();
-    return noiseSource as any; // Treat as OscillatorNode for compatibility
+    return noiseSource; // Return the source for start/stop control
 }
