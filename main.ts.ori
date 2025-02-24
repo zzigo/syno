@@ -1,0 +1,64 @@
+import { Plugin } from "obsidian";
+
+export default class SynoPlugin extends Plugin {
+  private audioContext: AudioContext | null = null;
+
+  async onload() {
+    console.log("Syno Plugin Loaded");
+    await this.loadWorklet();
+
+    this.addCommand({
+      id: "play-syno",
+      name: "Play Syno Expression",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "G" }],
+      editorCallback: (editor) => {
+        this.processSynoExpression(editor);
+      },
+    });
+  }
+
+  async loadWorklet() {
+    if (!this.audioContext) {
+      this.audioContext = new AudioContext();
+      await this.audioContext.audioWorklet.addModule("worklet-processor.js");
+    }
+  }
+
+  processSynoExpression(editor: any) {
+    const cursor = editor.getCursor();
+    const line = editor.getLine(cursor.line);
+    const synoRegex = /&(.*?)\./g;
+    const match = synoRegex.exec(line);
+
+    if (match) {
+      const synoCode = match[1].trim();
+      this.runSyno(synoCode);
+    }
+  }
+
+  runSyno(code: string) {
+    if (!this.audioContext) return;
+
+    const params = this.parseSynoCode(code);
+    const node = new AudioWorkletNode(this.audioContext, "syno-processor");
+    node.port.postMessage(params);
+    node.connect(this.audioContext.destination);
+
+    if (this.audioContext.state === "suspended") {
+      this.audioContext.resume();
+    }
+  }
+
+  parseSynoCode(code: string) {
+    const [synth, ...effects] = code.split(".");
+    const [synthType, ...params] = synth.split("(").join("").split(",");
+    return { synthType, params, effects };
+  }
+
+  onunload() {
+    console.log("Syno Plugin Unloaded");
+    if (this.audioContext) {
+      this.audioContext.close();
+    }
+  }
+}

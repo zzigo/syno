@@ -1,0 +1,13 @@
+{
+  "name": "syno",
+  "version": "1.0.0",
+  "description": "This is a sample plugin for Obsidian (https://obsidian.md).",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

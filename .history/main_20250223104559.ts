@@ -1,0 +1,43 @@
+import { Plugin, MarkdownPostProcessorContext } from "obsidian";
+
+const SYNOPLUGIN_VERSION = 1.0; // Static version number
+
+export default class SynoPlugin extends Plugin {
+	async onload() {
+		console.log(`Syno Plugin: Loaded (v${SYNOPLUGIN_VERSION})`);
+
+		// Register Block Processor (```syno)
+		this.registerMarkdownCodeBlockProcessor("syno", (source, el, ctx) => {
+			this.processSynoBlock(source, el);
+		});
+
+		// Register Inline Processor (&print("message")&)
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			this.processInlineSyno(el);
+		});
+	}
+
+	onunload() {
+		console.log(`Syno Plugin: Unloaded (v${SYNOPLUGIN_VERSION})`);
+	}
+
+	/** Process Syno Block ```syno print("hello syno")``` */
+	private processSynoBlock(source: string, el: HTMLElement) {
+		console.log("Processing Syno Block:", source);
+
+		// Ensure block is rendered properly
+		el.createEl("pre", { text: `print("${source.trim()}") ▷` });
+	}
+
+	/** Process Inline Syno: &print("message")& */
+	private processInlineSyno(el: HTMLElement) {
+		const regex = /&print$begin:math:text$"([^"]+)"$end:math:text$&/g;
+		let textContent = el.innerHTML;
+
+		if (!textContent.match(regex)) return;
+
+		el.innerHTML = textContent.replace(regex, (_match, message) => {
+			return `<span class="syno-inline" style="cursor:pointer; white-space:nowrap;">print("${message}") ▷</span>`;
+		});
+	}
+}
