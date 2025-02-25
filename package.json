@@ -1,15 +1,15 @@
 {
   "name": "obsidian-syno-plugin",
-  "version": "1.0.0",
+  "version": "1.6.0",
   "description": "Syno Plugin for Obsidian",
   "main": "main.js",
   "scripts": {
-    "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "dev": "node src/esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node src/esbuild.config.mjs production",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": [],
-  "author": "",
+  "author": "Luciano Azzigotti",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^18.19.76",

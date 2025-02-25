@@ -1,12 +1,31 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "outDir": "./dist",
+    "target": "esnext",
+    "module": "esnext",
     "strict": true,
+    "noEmit": false,
+    "outDir": ".",
+    "esModuleInterop": true,
     "skipLibCheck": true,
-    "esModuleInterop": true
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "*": ["src/*"]
+    },
+    "lib": ["esnext", "dom", "webworker"],
+    "types": ["node", "obsidian"],
+    "resolveJsonModule": true
   },
-  "include": ["main.ts", "worklet-processor.ts"]
+  "include": [
+    "src/main.ts",
+    "src/parser.ts",
+    "src/audio.ts",
+    "src/nodeFactory.ts",
+    "src/transitions.ts",
+    "src/generators.ts",
+    "src/processors.ts",
+    "src/renderer.ts",
+    "src/matdisp.ts"
+  ],
+  "exclude": ["node_modules"]
 }

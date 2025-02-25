@@ -1,10 +1,10 @@
 {
-	"id": "syno",
-	"name": "Syno",
-	"version": "1.0.0",
-	"minAppVersion": "1.1.0",
-	"description": "Inline sound synthesis plugin for Obsidian.",
-	"author": "Luciano Azzigotti",
-	"authorUrl": "https://github.com/zzigo/",
-	"isDesktopOnly": false
+  "id": "syno",
+  "name": "Syno",
+  "version": "1.6.0",
+  "minAppVersion": "1.16.0",
+  "description": "Inline sound synthesis plugin for Obsidian.",
+  "author": "Luciano Azzigotti",
+  "authorUrl": "https://github.com/zzigo/",
+  "isDesktopOnly": false
 }
