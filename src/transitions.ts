@@ -1,7 +1,4 @@
 // /src/transitions.ts
-// Command: Schedules and manages parameter transitions (e.g., freq: 100>300)
-// Design Pattern: Command - Encapsulates transition commands for real-time execution
-
 import { Transition } from "./parser";
 
 export class TransitionManager {
@@ -17,29 +14,42 @@ export class TransitionManager {
 		start: number,
 		end: number,
 		duration: number,
-		currentTime: number
+		currentTime: number,
+		middle?: number
 	) {
-		param.setValueAtTime(start, currentTime);
-		param.linearRampToValueAtTime(end, currentTime + duration);
-		this.activeTransitions.push({
-			param,
-			end,
-			duration,
-			startTime: currentTime,
-		});
+		if (middle !== undefined) {
+			var halfDuration = duration / 2;
+			param.setValueAtTime(start, currentTime);
+			param.linearRampToValueAtTime(middle, currentTime + halfDuration);
+			param.linearRampToValueAtTime(end, currentTime + duration);
+			this.activeTransitions.push({
+				param,
+				end,
+				duration,
+				startTime: currentTime,
+			});
+		} else {
+			param.setValueAtTime(start, currentTime);
+			param.linearRampToValueAtTime(end, currentTime + duration);
+			this.activeTransitions.push({
+				param,
+				end,
+				duration,
+				startTime: currentTime,
+			});
+		}
 	}
 
 	getActiveTimers(currentTime: number): number[] {
-		this.activeTransitions = this.activeTransitions.filter((t) => {
-			const elapsed = currentTime - t.startTime;
+		this.activeTransitions = this.activeTransitions.filter(function (t) {
+			var elapsed = currentTime - t.startTime;
 			return elapsed < t.duration;
 		});
-		return this.activeTransitions.map((t) =>
-			Math.floor(currentTime - t.startTime)
-		);
+		return this.activeTransitions.map(function (t) {
+			return Math.floor(currentTime - t.startTime);
+		});
 	}
 
-	// Fix: Clear active transitions for new playback
 	clear() {
 		this.activeTransitions = [];
 	}

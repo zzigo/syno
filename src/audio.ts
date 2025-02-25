@@ -1,8 +1,5 @@
 // /src/audio.ts
-// Composite: Manages audio execution, coordinates node creation and transitions
-// Design Pattern: Composite - Executes AST nodes (single or grouped), delegates to factories and transitions
-
-import { SynthNode, MasterNode, AudioNodeType } from "./parser";
+import { SynthNode, MasterNode, AudioNodeType, Transition } from "./parser";
 import { NodeFactory } from "./nodeFactory";
 import { TransitionManager } from "./transitions";
 import { AudioProcessors } from "./processors";
@@ -55,22 +52,27 @@ export class AudioManager {
 
 			const gain = ctx.createGain();
 			const now = ctx.currentTime;
-			const startTime = synthNode.startTime ?? 0; // New: Start offset
+			const startTime = synthNode.startTime ?? 0;
 
 			if (typeof synthNode.volume === "object") {
 				const startVol = synthNode.volume.start / 9;
+				const peakVol =
+					synthNode.volume.middle !== undefined
+						? synthNode.volume.middle / 9
+						: synthNode.volume.end / 9;
 				const endVol = synthNode.volume.end / 9;
-				const duration = synthNode.volume.duration;
+				const totalDuration = synthNode.volume.duration;
 
-				gain.gain.setValueAtTime(startVol, now + startTime);
-				gain.gain.linearRampToValueAtTime(
+				this.transitionManager.schedule(
+					gain.gain,
+					startVol,
 					endVol,
-					now + startTime + duration
+					totalDuration,
+					now + startTime,
+					synthNode.volume.middle !== undefined ? peakVol : undefined
 				);
 				console.log(
-					`Applying volume ramp: ${startVol} to ${endVol} over ${duration}s at ${
-						now + startTime
-					}`
+					`Volume: ${startVol} -> ${peakVol} -> ${endVol} over ${totalDuration}s`
 				);
 			} else if (synthNode.envelope) {
 				const [a, d, s, r] = synthNode.envelope.split("").map(Number);
@@ -108,12 +110,17 @@ export class AudioManager {
 				if (typeof synthNode.pan === "number") {
 					panNode.pan.value = synthNode.pan;
 				} else {
-					this.transitionManager.schedule(
-						panNode.pan,
-						synthNode.pan.start,
-						synthNode.pan.end,
-						synthNode.pan.duration,
-						now + startTime
+					const startPan = synthNode.pan.start;
+					const endPan = synthNode.pan.end;
+					const timeConstant = synthNode.pan.duration / 4;
+					panNode.pan.setValueAtTime(startPan, now + startTime);
+					panNode.pan.setTargetAtTime(
+						endPan,
+						now + startTime,
+						timeConstant
+					);
+					console.log(
+						`Panning: ${startPan} to ${endPan} over ${synthNode.pan.duration}s`
 					);
 				}
 				lastNode.connect(panNode);
@@ -147,26 +154,38 @@ export class AudioManager {
 			if (synthNode.filter !== undefined) {
 				filterNode = ctx.createBiquadFilter();
 				filterNode.type = "lowpass";
-				filterNode.Q.value = 2; // Default Q=2
-				console.log(`Applying filter: Q=${filterNode.Q.value}`);
+				filterNode.Q.value = 20;
+				console.log(
+					`Filter: Q=${filterNode.Q.value}, data: ${JSON.stringify(
+						synthNode.filter
+					)}`
+				);
 				if (typeof synthNode.filter === "number") {
-					filterNode.frequency.value = synthNode.filter * 100; // Fix: 0-9 -> 100-900 Hz
+					filterNode.frequency.value = Math.max(
+						100,
+						synthNode.filter * 500
+					);
 					console.log(
 						`Static cutoff: ${filterNode.frequency.value} Hz`
 					);
 				} else {
-					const startFreq = synthNode.filter.start * 100; // Fix: 0-9 -> 100-900 Hz
-					const endFreq = synthNode.filter.end * 100;
+					const startFreq = Math.max(
+						100,
+						synthNode.filter.start * 500
+					);
+					const endFreq = Math.max(100, synthNode.filter.end * 500);
+					const timeConstant = synthNode.filter.duration / 4;
 					filterNode.frequency.setValueAtTime(
 						startFreq,
 						now + startTime
 					);
-					filterNode.frequency.linearRampToValueAtTime(
+					filterNode.frequency.setTargetAtTime(
 						endFreq,
-						now + startTime + synthNode.filter.duration
+						now + startTime,
+						timeConstant
 					);
 					console.log(
-						`Cutoff sweep: ${startFreq} to ${endFreq} Hz over ${synthNode.filter.duration}s`
+						`Filter sweep: ${startFreq} to ${endFreq} Hz, timeConstant ${timeConstant}s`
 					);
 				}
 				lastNode.connect(filterNode);
@@ -185,6 +204,11 @@ export class AudioManager {
 
 			lastNode.connect(this.masterGain!);
 			osc.start(now + startTime);
+			const duration =
+				typeof synthNode.volume === "object"
+					? synthNode.volume.duration
+					: 20;
+			osc.stop(now + startTime + duration);
 			this.activeNodes.push({
 				osc,
 				gain,
@@ -200,30 +224,38 @@ export class AudioManager {
 	async stop(): Promise<void> {
 		if (!this.audioContext) return;
 		const now = this.audioContext.currentTime;
+
 		this.activeNodes.forEach(
 			({ osc, gain, pan, chop, chopInterval, reverb, filter }) => {
 				try {
-					const release =
-						gain.gain.value > 0
-							? parseInt(gain.gain.value.toString().slice(-1)) *
-									0.1 || 0.5
-							: 0.5;
 					gain.gain.cancelScheduledValues(now);
-					gain.gain.setValueAtTime(gain.gain.value, now);
-					gain.gain.linearRampToValueAtTime(0, now + release);
-					osc.stop(now + release);
+					if (pan) pan.pan.cancelScheduledValues(now);
+					if (filter) filter.frequency.cancelScheduledValues(now);
+					osc.frequency.cancelScheduledValues(now);
+
+					gain.gain.setValueAtTime(0, now);
+					osc.stop(now);
 					osc.disconnect();
 					gain.disconnect();
-					if (pan) pan.disconnect();
-					if (chop) chop.disconnect();
-					if (chopInterval) clearInterval(chopInterval);
+					if (pan) {
+						pan.pan.setValueAtTime(0, now);
+						pan.disconnect();
+					}
+					if (chop) {
+						chop.disconnect();
+						if (chopInterval) clearInterval(chopInterval);
+					}
 					if (reverb) reverb.disconnect();
-					if (filter) filter.disconnect();
+					if (filter) {
+						filter.frequency.setValueAtTime(1000, now);
+						filter.disconnect();
+					}
 				} catch (e) {
 					console.warn("Error stopping node:", e);
 				}
 			}
 		);
+
 		this.activeNodes = [];
 		this.transitionManager.clear();
 		await this.audioContext.suspend();
@@ -233,7 +265,7 @@ export class AudioManager {
 		if (this.audioContext) {
 			this.audioContext
 				.close()
-				.catch((e) => console.warn("Error stopping node:", e));
+				.catch((e) => console.warn("Error closing context:", e));
 			this.audioContext = null;
 			this.masterGain = null;
 		}

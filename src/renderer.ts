@@ -1,7 +1,4 @@
 // /src/renderer.ts
-// Observer: Renders and updates UI (play/stop, VU meters, timers)
-// Design Pattern: Observer - Reacts to audio state changes for real-time feedback
-
 import { MarkdownPostProcessorContext } from "obsidian";
 import { SynthNode, MasterNode, AudioNodeType, Parser } from "./parser";
 import { AudioManager } from "./audio";
@@ -26,62 +23,85 @@ export class Renderer {
 		playButton.textContent = "▶";
 		playButton.className = "syno-play-button";
 		playButton.style.cursor = "pointer";
-		playButton.style.color = "#00FFFF";
+		playButton.style.color = "#00FFFF"; // Cyan for play button
 		playButton.style.marginRight = "8px";
 
 		const codeText = nodes
 			.map((n) => {
 				if (n.type === "master") {
-					return `master v${
+					return `master <span style="color: violet">v</span>${
 						(n as MasterNode).volume !== undefined
 							? (n as MasterNode).volume
 							: ""
 					}`;
 				}
 				const synth = n as SynthNode;
-				return `${synth.type}${
+				const startTimeStr =
+					synth.startTime !== undefined && synth.startTime > 0
+						? `<span style="color: orange">${synth.startTime}</span>`
+						: "";
+				const typeStr = `<span style="color: LightCoral">${synth.type}</span>`;
+				const freqStr =
 					typeof synth.freq === "object"
-						? `${synth.freq.start}>${synth.freq.end}'${synth.freq.duration}`
-						: synth.freq || ""
-				}${
+						? `${synth.freq.start}>${synth.freq.end}<span style="color: lime">'${synth.freq.duration}</span>`
+						: synth.freq || "";
+				const volStr =
 					typeof synth.volume === "object"
-						? `v${synth.volume.start}>${synth.volume.end}'${synth.volume.duration}`
+						? `<span style="color: violet">v</span>${
+								synth.volume.start
+						  }>${
+								synth.volume.middle !== undefined
+									? synth.volume.middle
+									: synth.volume.end
+						  }>${synth.volume.end}<span style="color: lime">'${
+								synth.volume.duration
+						  }</span>`
 						: synth.volume !== undefined
-						? `v${synth.volume}`
-						: ""
-				}${
+						? `<span style="color: violet">v</span>${synth.volume}`
+						: "";
+				const panStr =
 					typeof synth.pan === "object"
-						? `p${synth.pan.start}>${synth.pan.end}'${synth.pan.duration}`
+						? `<span style="color: violet">p</span>${synth.pan.start}>${synth.pan.end}<span style="color: lime">'${synth.pan.duration}</span>`
 						: synth.pan !== undefined
-						? `p${synth.pan}`
-						: ""
-				}${synth.chop !== undefined ? `h${synth.chop}` : ""}${
-					synth.reverb !== undefined ? `r${synth.reverb}` : ""
-				}${
+						? `<span style="color: violet">p</span>${synth.pan}`
+						: "";
+				const chopStr =
+					synth.chop !== undefined
+						? `<span style="color: violet">h</span>${synth.chop}`
+						: "";
+				const reverbStr =
+					synth.reverb !== undefined
+						? `<span style="color: violet">r</span>${synth.reverb}`
+						: "";
+				const filterStr =
 					typeof synth.filter === "object"
-						? `f${synth.filter.start}>${synth.filter.end}'${synth.filter.duration}`
+						? `<span style="color: violet">f</span>${synth.filter.start}>${synth.filter.end}<span style="color: lime">'${synth.filter.duration}</span>`
 						: synth.filter !== undefined
-						? `f${synth.filter}`
-						: ""
-				}${synth.envelope !== undefined ? `e${synth.envelope}` : ""}`;
+						? `<span style="color: violet">f</span>${synth.filter}`
+						: "";
+				const envelopeStr =
+					synth.envelope !== undefined
+						? `<span style="color: violet">e</span>${synth.envelope}`
+						: "";
+				return `${startTimeStr}${typeStr}${freqStr}${volStr}${panStr}${chopStr}${reverbStr}${filterStr}${envelopeStr}`;
 			})
 			.join(" ");
 
 		const codeSpan = document.createElement("span");
-		codeSpan.textContent = codeText;
+		codeSpan.innerHTML = codeText;
 		codeSpan.style.flexGrow = "1";
 
 		const durationDisplay = document.createElement("span");
 		durationDisplay.textContent = "";
 		durationDisplay.className = "syno-duration";
-		durationDisplay.style.color = "rgba(128, 128, 128, 0.5)";
+		durationDisplay.style.color = "rgb(148, 205, 160)"; // Green for timers
 		durationDisplay.style.marginRight = "8px";
 		durationDisplay.style.minWidth = "40px";
 
 		const vuMeter = document.createElement("span");
 		vuMeter.textContent = "  ";
 		vuMeter.className = "syno-vumeter";
-		vuMeter.style.marginRight = "15px";
+		vuMeter.style.marginRight = "30px";
 
 		code.appendChild(playButton);
 		code.appendChild(codeSpan);
