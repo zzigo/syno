@@ -8,7 +8,7 @@ import { AudioManager } from "./audio";
 import { Renderer } from "./renderer";
 
 export default class SynoPlugin extends Plugin {
-  private static readonly VERSION = "1.8.0";
+  private static readonly VERSION = "1.7.0";
   private parser: Parser = new Parser();
   private audio: AudioManager = new AudioManager();
   private renderer: Renderer = new Renderer();
