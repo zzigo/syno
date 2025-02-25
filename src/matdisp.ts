@@ -1,7 +1,4 @@
 // /src/matdisp.ts
-// Configuration: Default values for SYNO generators, processors, and master instance
-// Design Pattern: Configuration - Defines static defaults for musical performance
-
 export type GeneratorType = "s" | "q" | "a" | "t" | "n" | "b";
 
 interface GeneratorDefaults {
@@ -27,6 +24,7 @@ interface MatDisp {
 	transitions: {
 		defaultDuration: number;
 	};
+	renderWithLinefeed: boolean; // New variable
 }
 
 export const matdisp: MatDisp = {
@@ -41,10 +39,11 @@ export const matdisp: MatDisp = {
 	processors: {
 		v: { level: 5 },
 		p: { position: 0 },
-		r: { time: 1 }, // Default reverb: 1s
+		r: { time: 1 },
 		d: { time: 0.5 },
-		h: { rate: 1 }, // Default chop: 0.1s
+		h: { rate: 1 },
 		e: { adsr: "0155" },
+		"\\": { feedback: 0.5 },
 	},
 	master: {
 		volume: 8,
@@ -53,4 +52,5 @@ export const matdisp: MatDisp = {
 	transitions: {
 		defaultDuration: 4,
 	},
+	renderWithLinefeed: true, // Default: whitespace-separated
 };

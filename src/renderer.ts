@@ -2,6 +2,7 @@
 import { MarkdownPostProcessorContext } from "obsidian";
 import { SynthNode, MasterNode, AudioNodeType, Parser } from "./parser";
 import { AudioManager } from "./audio";
+import { matdisp } from "./matdisp";
 
 export class Renderer {
 	renderBlock(
@@ -23,7 +24,7 @@ export class Renderer {
 		playButton.textContent = "▶";
 		playButton.className = "syno-play-button";
 		playButton.style.cursor = "pointer";
-		playButton.style.color = "#00FFFF"; // Cyan for play button
+		playButton.style.color = "#00FFFF";
 		playButton.style.marginRight = "8px";
 
 		const codeText = nodes
@@ -36,24 +37,39 @@ export class Renderer {
 					}`;
 				}
 				const synth = n as SynthNode;
+				console.log(
+					`Rendering node: ${JSON.stringify(synth, null, 2)}`
+				);
 				const startTimeStr =
 					synth.startTime !== undefined && synth.startTime > 0
 						? `<span style="color: orange">${synth.startTime}</span>`
 						: "";
-				const typeStr = `<span style="color: LightCoral">${synth.type}</span>`;
+				const bufferStr =
+					synth.buffer && (synth.glissando || synth.type === "b")
+						? `${synth.buffer}`
+						: "";
+				const typeStr =
+					synth.type !== "b"
+						? `<span style="color: LightCoral">${synth.type}</span>`
+						: "";
 				const freqStr =
 					typeof synth.freq === "object"
-						? `${synth.freq.start}>${synth.freq.end}<span style="color: lime">'${synth.freq.duration}</span>`
+						? `${synth.freq.start}<span style="color: yellow">></span>${synth.freq.end}<span style="color: lime">'${synth.freq.duration}</span>`
 						: synth.freq || "";
 				const volStr =
 					typeof synth.volume === "object"
 						? `<span style="color: violet">v</span>${
 								synth.volume.start
-						  }>${
+						  }<span style="color: yellow">></span>${
 								synth.volume.middle !== undefined
 									? synth.volume.middle
 									: synth.volume.end
-						  }>${synth.volume.end}<span style="color: lime">'${
+						  }${
+								synth.volume.middle !== undefined
+									? '<span style="color: yellow">></span>' +
+									  synth.volume.end
+									: ""
+						  }<span style="color: lime">'${
 								synth.volume.duration
 						  }</span>`
 						: synth.volume !== undefined
@@ -61,7 +77,7 @@ export class Renderer {
 						: "";
 				const panStr =
 					typeof synth.pan === "object"
-						? `<span style="color: violet">p</span>${synth.pan.start}>${synth.pan.end}<span style="color: lime">'${synth.pan.duration}</span>`
+						? `<span style="color: violet">p</span>${synth.pan.start}<span style="color: yellow">></span>${synth.pan.end}<span style="color: lime">'${synth.pan.duration}</span>`
 						: synth.pan !== undefined
 						? `<span style="color: violet">p</span>${synth.pan}`
 						: "";
@@ -75,17 +91,28 @@ export class Renderer {
 						: "";
 				const filterStr =
 					typeof synth.filter === "object"
-						? `<span style="color: violet">f</span>${synth.filter.start}>${synth.filter.end}<span style="color: lime">'${synth.filter.duration}</span>`
+						? `<span style="color: violet">f</span>${synth.filter.start}<span style="color: yellow">></span>${synth.filter.end}<span style="color: lime">'${synth.filter.duration}</span>`
 						: synth.filter !== undefined
 						? `<span style="color: violet">f</span>${synth.filter}`
 						: "";
-				const envelopeStr =
-					synth.envelope !== undefined
-						? `<span style="color: violet">e</span>${synth.envelope}`
-						: "";
-				return `${startTimeStr}${typeStr}${freqStr}${volStr}${panStr}${chopStr}${reverbStr}${filterStr}${envelopeStr}`;
+				const glissStr = synth.glissando
+					? `<span style="color: violet">\\</span>${synth.glissando.start}<span style="color: yellow">></span>${synth.glissando.end}<span style="color: lime">'${synth.glissando.duration}</span>`
+					: "";
+				const envelopeStr = synth.envelope
+					? `<span style="color: violet">e</span>${synth.envelope}`
+					: "";
+				const recursionStr = synth.recursion
+					? `{${synth.recursion
+							.map((r) => this.renderNode(r))
+							.join(
+								""
+							)}}${typeStr}${freqStr}${volStr}${panStr}${chopStr}${reverbStr}${filterStr}${glissStr}${envelopeStr}`
+					: `${typeStr}${freqStr}${volStr}${panStr}${chopStr}${reverbStr}${filterStr}${glissStr}${envelopeStr}`;
+				return synth.buffer && synth.type === "b"
+					? `${bufferStr}${glissStr}`
+					: `${startTimeStr}${bufferStr}${recursionStr}`;
 			})
-			.join(" ");
+			.join(matdisp.renderWithLinefeed ? "\n" : " "); // Toggle linefeed or whitespace
 
 		const codeSpan = document.createElement("span");
 		codeSpan.innerHTML = codeText;
@@ -94,7 +121,7 @@ export class Renderer {
 		const durationDisplay = document.createElement("span");
 		durationDisplay.textContent = "";
 		durationDisplay.className = "syno-duration";
-		durationDisplay.style.color = "rgb(148, 205, 160)"; // Green for timers
+		durationDisplay.style.color = "rgb(148, 205, 160)";
 		durationDisplay.style.marginRight = "8px";
 		durationDisplay.style.minWidth = "40px";
 
@@ -236,5 +263,88 @@ export class Renderer {
 				}
 			};
 		});
+	}
+
+	private renderNode(node: AudioNodeType): string {
+		if (node.type === "master") {
+			return `master <span style="color: violet">v</span>${
+				(node as MasterNode).volume !== undefined
+					? (node as MasterNode).volume
+					: ""
+			}`;
+		}
+		const synth = node as SynthNode;
+		console.log(
+			`Rendering recursive node: ${JSON.stringify(synth, null, 2)}`
+		);
+		const startTimeStr =
+			synth.startTime !== undefined && synth.startTime > 0
+				? `<span style="color: orange">${synth.startTime}</span>`
+				: "";
+		const bufferStr =
+			synth.buffer && (synth.glissando || synth.type === "b")
+				? `${synth.buffer}`
+				: "";
+		const typeStr =
+			synth.type !== "b"
+				? `<span style="color: LightCoral">${synth.type}</span>`
+				: "";
+		const freqStr =
+			typeof synth.freq === "object"
+				? `${synth.freq.start}<span style="color: yellow">></span>${synth.freq.end}<span style="color: lime">'${synth.freq.duration}</span>`
+				: synth.freq || "";
+		const volStr =
+			typeof synth.volume === "object"
+				? `<span style="color: violet">v</span>${
+						synth.volume.start
+				  }<span style="color: yellow">></span>${
+						synth.volume.middle !== undefined
+							? synth.volume.middle
+							: synth.volume.end
+				  }${
+						synth.volume.middle !== undefined
+							? '<span style="color: yellow">></span>' +
+							  synth.volume.end
+							: ""
+				  }<span style="color: lime">'${synth.volume.duration}</span>`
+				: synth.volume !== undefined
+				? `<span style="color: violet">v</span>${synth.volume}`
+				: "";
+		const panStr =
+			typeof synth.pan === "object"
+				? `<span style="color: violet">p</span>${synth.pan.start}<span style="color: yellow">></span>${synth.pan.end}<span style="color: lime">'${synth.pan.duration}</span>`
+				: synth.pan !== undefined
+				? `<span style="color: violet">p</span>${synth.pan}`
+				: "";
+		const chopStr =
+			synth.chop !== undefined
+				? `<span style="color: violet">h</span>${synth.chop}`
+				: "";
+		const reverbStr =
+			synth.reverb !== undefined
+				? `<span style="color: violet">r</span>${synth.reverb}`
+				: "";
+		const filterStr =
+			typeof synth.filter === "object"
+				? `<span style="color: violet">f</span>${synth.filter.start}<span style="color: yellow">></span>${synth.filter.end}<span style="color: lime">'${synth.filter.duration}</span>`
+				: synth.filter !== undefined
+				? `<span style="color: violet">f</span>${synth.filter}`
+				: "";
+		const glissStr = synth.glissando
+			? `<span style="color: violet">\\</span>${synth.glissando.start}<span style="color: yellow">></span>${synth.glissando.end}<span style="color: lime">'${synth.glissando.duration}</span>`
+			: "";
+		const envelopeStr = synth.envelope
+			? `<span style="color: violet">e</span>${synth.envelope}`
+			: "";
+		const recursionStr = synth.recursion
+			? `{${synth.recursion
+					.map((r) => this.renderNode(r))
+					.join(
+						""
+					)}}${typeStr}${freqStr}${volStr}${panStr}${chopStr}${reverbStr}${filterStr}${glissStr}${envelopeStr}`
+			: `${typeStr}${freqStr}${volStr}${panStr}${chopStr}${reverbStr}${filterStr}${glissStr}${envelopeStr}`;
+		return synth.buffer && synth.type === "b"
+			? `${bufferStr}${glissStr}`
+			: `${startTimeStr}${bufferStr}${recursionStr}`;
 	}
 }

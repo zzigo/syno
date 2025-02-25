@@ -9,7 +9,8 @@ export class AudioManager {
 	private audioContext: AudioContext | null = null;
 	private masterGain: GainNode | null = null;
 	private activeNodes: {
-		osc: OscillatorNode;
+		osc?: OscillatorNode;
+		source?: AudioBufferSourceNode;
 		gain: GainNode;
 		pan?: StereoPannerNode;
 		chop?: AudioNode;
@@ -17,6 +18,7 @@ export class AudioManager {
 		reverb?: AudioNode;
 		filter?: BiquadFilterNode;
 	}[] = [];
+	private buffers: { [key: string]: AudioBuffer } = {};
 
 	private nodeFactory: NodeFactory = new NodeFactory();
 	private transitionManager: TransitionManager = new TransitionManager();
@@ -37,8 +39,10 @@ export class AudioManager {
 	async play(nodes: AudioNodeType[]): Promise<void> {
 		const ctx = await this.ensureContext();
 		this.activeNodes = [];
+		this.buffers = {};
 
-		for (const node of nodes) {
+		for (let i = 0; i < nodes.length; i++) {
+			const node = nodes[i];
 			if (node.type === "master") {
 				if (node.volume !== undefined && this.masterGain) {
 					this.masterGain.gain.value = node.volume / 9;
@@ -47,13 +51,136 @@ export class AudioManager {
 			}
 
 			const synthNode = node as SynthNode;
-			const osc = this.nodeFactory.createNode(ctx, synthNode);
-			if (!osc) continue;
-
-			const gain = ctx.createGain();
 			const now = ctx.currentTime;
 			const startTime = synthNode.startTime ?? 0;
 
+			let sourceNode: OscillatorNode | AudioBufferSourceNode;
+			let gain = ctx.createGain();
+			let chopInterval: number | undefined;
+			let implicitBuffer: AudioBuffer | undefined;
+
+			// Implicit buffer from previous node
+			if (i > 0 && synthNode.recursion) {
+				const prevNode = nodes[i - 1] as SynthNode;
+				implicitBuffer = await this.recordNode(ctx, prevNode);
+			}
+
+			if (
+				synthNode.type === "b" &&
+				synthNode.buffer &&
+				this.buffers[synthNode.buffer]
+			) {
+				sourceNode = ctx.createBufferSource();
+				sourceNode.buffer = this.buffers[synthNode.buffer];
+			} else if (implicitBuffer && synthNode.recursion) {
+				sourceNode = ctx.createBufferSource();
+				sourceNode.buffer = implicitBuffer;
+			} else {
+				sourceNode = this.nodeFactory.createNode(
+					ctx,
+					synthNode
+				) as OscillatorNode;
+				if (!sourceNode) continue;
+			}
+
+			sourceNode.connect(gain);
+			let lastNode: AudioNode = gain;
+
+			// Dynamic processor chain
+			const processors = [
+				{
+					condition: synthNode.pan,
+					create: () => ctx.createStereoPanner(),
+					apply: (n: StereoPannerNode) => {
+						if (typeof synthNode.pan === "number") {
+							n.pan.value = synthNode.pan;
+						} else {
+							n.pan.setValueAtTime(
+								synthNode.pan.start,
+								now + startTime
+							);
+							n.pan.setTargetAtTime(
+								synthNode.pan.end,
+								now + startTime,
+								synthNode.pan.duration / 4
+							);
+						}
+					},
+				},
+				{
+					condition: synthNode.chop,
+					create: () =>
+						AudioProcessors.applyChop(
+							ctx,
+							lastNode,
+							synthNode.chop!,
+							now + startTime
+						),
+					apply: (n: AudioNode) => {
+						chopInterval = (AudioProcessors as any).chopInterval;
+					},
+				},
+				{
+					condition: synthNode.reverb,
+					create: () =>
+						AudioProcessors.applyReverb(
+							ctx,
+							lastNode,
+							synthNode.reverb!
+						),
+					apply: () => {},
+				},
+				{
+					condition: synthNode.filter,
+					create: () => ctx.createBiquadFilter(),
+					apply: (n: BiquadFilterNode) => {
+						n.type = "lowpass";
+						n.Q.value = 20;
+						if (typeof synthNode.filter === "number") {
+							n.frequency.value = Math.max(
+								100,
+								synthNode.filter * 500
+							);
+						} else {
+							const startFreq = Math.max(
+								100,
+								synthNode.filter.start * 500
+							);
+							const endFreq = Math.max(
+								100,
+								synthNode.filter.end * 500
+							);
+							const timeConstant = synthNode.filter.duration / 4;
+							n.frequency.setValueAtTime(
+								startFreq,
+								now + startTime
+							);
+							n.frequency.setTargetAtTime(
+								endFreq,
+								now + startTime,
+								timeConstant
+							);
+						}
+					},
+				},
+			];
+
+			const nodesChain: AudioNode[] = [gain];
+			for (const proc of processors) {
+				if (proc.condition) {
+					const newNode = proc.create();
+					lastNode.connect(newNode);
+					proc.apply(newNode as any);
+					lastNode = newNode;
+					nodesChain.push(newNode);
+				}
+			}
+
+			// Volume
+			const duration =
+				typeof synthNode.volume === "object"
+					? synthNode.volume.duration
+					: 20;
 			if (typeof synthNode.volume === "object") {
 				const startVol = synthNode.volume.start / 9;
 				const peakVol =
@@ -61,140 +188,161 @@ export class AudioManager {
 						? synthNode.volume.middle / 9
 						: synthNode.volume.end / 9;
 				const endVol = synthNode.volume.end / 9;
-				const totalDuration = synthNode.volume.duration;
-
 				this.transitionManager.schedule(
 					gain.gain,
 					startVol,
 					endVol,
-					totalDuration,
+					duration,
 					now + startTime,
 					synthNode.volume.middle !== undefined ? peakVol : undefined
 				);
 				console.log(
-					`Volume: ${startVol} -> ${peakVol} -> ${endVol} over ${totalDuration}s`
+					`Volume: ${startVol} -> ${peakVol} -> ${endVol} over ${duration}s`
 				);
-			} else if (synthNode.envelope) {
-				const [a, d, s, r] = synthNode.envelope.split("").map(Number);
-				const attack = a * 0.1;
-				const decay = d * 0.1;
-				const sustain = s / 9;
-				const release = r * 0.1;
-				const volume = (synthNode.volume ?? 5) / 9;
-
-				gain.gain.setValueAtTime(0, now + startTime);
-				gain.gain.linearRampToValueAtTime(
-					volume,
-					now + startTime + attack
-				);
-				gain.gain.linearRampToValueAtTime(
-					volume * sustain,
-					now + startTime + attack + decay
-				);
-				osc.onended = () => {
-					gain.gain.cancelScheduledValues(now);
-					gain.gain.setValueAtTime(gain.gain.value, now);
-					gain.gain.linearRampToValueAtTime(0, now + release);
-				};
 			} else {
 				gain.gain.value = (synthNode.volume ?? 5) / 9;
 			}
 
-			let lastNode: AudioNode = osc;
-			osc.connect(gain);
-			lastNode = gain;
-
-			let panNode: StereoPannerNode | undefined;
-			if (synthNode.pan !== undefined) {
-				panNode = ctx.createStereoPanner();
-				if (typeof synthNode.pan === "number") {
-					panNode.pan.value = synthNode.pan;
-				} else {
-					const startPan = synthNode.pan.start;
-					const endPan = synthNode.pan.end;
-					const timeConstant = synthNode.pan.duration / 4;
-					panNode.pan.setValueAtTime(startPan, now + startTime);
-					panNode.pan.setTargetAtTime(
-						endPan,
-						now + startTime,
-						timeConstant
-					);
-					console.log(
-						`Panning: ${startPan} to ${endPan} over ${synthNode.pan.duration}s`
-					);
-				}
-				lastNode.connect(panNode);
-				lastNode = panNode;
-			}
-
-			let chopNode: AudioNode | undefined;
-			let chopInterval: number | undefined;
-			if (synthNode.chop !== undefined) {
-				chopNode = AudioProcessors.applyChop(
-					ctx,
-					lastNode,
-					synthNode.chop,
+			// Glissando
+			if (
+				synthNode.glissando &&
+				sourceNode instanceof AudioBufferSourceNode
+			) {
+				const startRate = synthNode.glissando.start / 440;
+				const endRate = synthNode.glissando.end / 440;
+				sourceNode.playbackRate.setValueAtTime(
+					startRate,
 					now + startTime
 				);
-				chopInterval = (AudioProcessors as any).chopInterval;
-				lastNode = chopNode;
+				sourceNode.playbackRate.linearRampToValueAtTime(
+					endRate,
+					now + startTime + duration
+				);
 			}
 
-			let reverbNode: AudioNode | undefined;
-			if (synthNode.reverb !== undefined) {
-				reverbNode = AudioProcessors.applyReverb(
-					ctx,
-					lastNode,
-					synthNode.reverb
-				);
-				lastNode = reverbNode;
-			}
+			// Recursion
+			if (synthNode.recursion) {
+				const modulatorNodes = synthNode.recursion;
+				let carrierNode = sourceNode;
 
-			let filterNode: BiquadFilterNode | undefined;
-			if (synthNode.filter !== undefined) {
-				filterNode = ctx.createBiquadFilter();
-				filterNode.type = "lowpass";
-				filterNode.Q.value = 20;
-				console.log(
-					`Filter: Q=${filterNode.Q.value}, data: ${JSON.stringify(
-						synthNode.filter
-					)}`
-				);
-				if (typeof synthNode.filter === "number") {
-					filterNode.frequency.value = Math.max(
-						100,
-						synthNode.filter * 500
-					);
-					console.log(
-						`Static cutoff: ${filterNode.frequency.value} Hz`
-					);
-				} else {
-					const startFreq = Math.max(
-						100,
-						synthNode.filter.start * 500
-					);
-					const endFreq = Math.max(100, synthNode.filter.end * 500);
-					const timeConstant = synthNode.filter.duration / 4;
-					filterNode.frequency.setValueAtTime(
-						startFreq,
-						now + startTime
-					);
-					filterNode.frequency.setTargetAtTime(
-						endFreq,
-						now + startTime,
-						timeConstant
-					);
-					console.log(
-						`Filter sweep: ${startFreq} to ${endFreq} Hz, timeConstant ${timeConstant}s`
-					);
+				for (const modNode of modulatorNodes) {
+					if (
+						modNode.type === "b" &&
+						modNode.buffer &&
+						this.buffers[modNode.buffer]
+					) {
+						carrierNode = ctx.createBufferSource();
+						carrierNode.buffer = this.buffers[modNode.buffer];
+						carrierNode.connect(gain);
+						lastNode = gain;
+					}
+
+					const modProcessors = [
+						{
+							condition: modNode.reverb,
+							create: () =>
+								AudioProcessors.applyReverb(
+									ctx,
+									lastNode,
+									modNode.reverb!
+								),
+							apply: () => {},
+						},
+						{
+							condition: modNode.chop,
+							create: () =>
+								AudioProcessors.applyChop(
+									ctx,
+									lastNode,
+									modNode.chop!,
+									now + startTime
+								),
+							apply: (n: AudioNode) => {
+								chopInterval = (AudioProcessors as any)
+									.chopInterval;
+							},
+						},
+						{
+							condition: modNode.filter,
+							create: () => ctx.createBiquadFilter(),
+							apply: (n: BiquadFilterNode) => {
+								n.type = "lowpass";
+								n.Q.value = 20;
+								if (typeof modNode.filter === "number")
+									n.frequency.value = Math.max(
+										100,
+										modNode.filter * 500
+									);
+								else {
+									const startFreq = Math.max(
+										100,
+										modNode.filter.start * 500
+									);
+									const endFreq = Math.max(
+										100,
+										modNode.filter.end * 500
+									);
+									const timeConstant =
+										modNode.filter.duration / 4;
+									n.frequency.setValueAtTime(
+										startFreq,
+										now + startTime
+									);
+									n.frequency.setTargetAtTime(
+										endFreq,
+										now + startTime,
+										timeConstant
+									);
+								}
+							},
+						},
+					];
+
+					for (const proc of modProcessors) {
+						if (proc.condition) {
+							const newNode = proc.create();
+							lastNode.connect(newNode);
+							proc.apply(newNode as any);
+							lastNode = newNode;
+							nodesChain.push(newNode);
+						}
+					}
+
+					if (["s", "q", "a", "t"].includes(modNode.type)) {
+						const modGain = ctx.createGain();
+						const modVolValue =
+							typeof modNode.volume === "object"
+								? modNode.volume.start
+								: modNode.volume ?? 5;
+						const modVol = modVolValue / 9; // Use modulator volume for depth
+						modGain.gain.value = modVol * 100; // Scale for FM depth
+						lastNode.connect(modGain);
+						const modOsc = this.nodeFactory.createNode(
+							ctx,
+							modNode
+						);
+						if (modOsc) {
+							modOsc.connect(modGain);
+							if (carrierNode instanceof OscillatorNode) {
+								modGain.connect(carrierNode.frequency); // FM modulation
+							} else if (
+								carrierNode instanceof AudioBufferSourceNode
+							) {
+								modGain.connect(carrierNode.playbackRate); // Pitch modulation for buffer
+							}
+							modOsc.start(now + startTime);
+							modOsc.stop(now + startTime + duration);
+						}
+					}
 				}
-				lastNode.connect(filterNode);
-				lastNode = filterNode;
 			}
 
-			if (typeof synthNode.freq === "object") {
+			if (
+				typeof synthNode.freq === "object" &&
+				sourceNode instanceof OscillatorNode
+			) {
 				this.transitionManager.schedule(
-					osc.frequency,
+					sourceNode.frequency,
 					synthNode.freq.start,
 					synthNode.freq.end,
 					synthNode.freq.duration,
@@ -202,21 +350,85 @@ export class AudioManager {
 				);
 			}
 
+			// Buffer recording
+			if (synthNode.buffer) {
+				const offlineCtx = new OfflineAudioContext(
+					2,
+					ctx.sampleRate * duration,
+					ctx.sampleRate
+				);
+				const offlineSource =
+					synthNode.type === "b" && this.buffers[synthNode.buffer]
+						? offlineCtx.createBufferSource()
+						: this.nodeFactory.createNode(offlineCtx, synthNode);
+				if (!offlineSource) continue;
+
+				if (
+					offlineSource instanceof AudioBufferSourceNode &&
+					synthNode.buffer &&
+					this.buffers[synthNode.buffer]
+				) {
+					offlineSource.buffer = this.buffers[synthNode.buffer];
+				}
+				const offlineGain = offlineCtx.createGain();
+				offlineSource.connect(offlineGain);
+				offlineGain.connect(offlineCtx.destination);
+
+				if (typeof synthNode.volume === "object") {
+					const startVol = synthNode.volume.start / 9;
+					const peakVol =
+						synthNode.volume.middle !== undefined
+							? synthNode.volume.middle / 9
+							: synthNode.volume.end / 9;
+					const endVol = synthNode.volume.end / 9;
+					this.transitionManager.schedule(
+						offlineGain.gain,
+						startVol,
+						endVol,
+						duration,
+						0,
+						synthNode.volume.middle !== undefined
+							? peakVol
+							: undefined
+					);
+				} else {
+					offlineGain.gain.value = (synthNode.volume ?? 5) / 9;
+				}
+
+				offlineSource.start(0);
+				offlineSource.stop(duration);
+				await offlineCtx.startRendering().then((buffer) => {
+					this.buffers[synthNode.buffer!] = buffer;
+				});
+			}
+
 			lastNode.connect(this.masterGain!);
-			osc.start(now + startTime);
-			const duration =
-				typeof synthNode.volume === "object"
-					? synthNode.volume.duration
-					: 20;
-			osc.stop(now + startTime + duration);
+			sourceNode.start(now + startTime);
+			sourceNode.stop(now + startTime + duration);
+
 			this.activeNodes.push({
-				osc,
+				osc:
+					sourceNode instanceof OscillatorNode
+						? sourceNode
+						: undefined,
+				source:
+					sourceNode instanceof AudioBufferSourceNode
+						? sourceNode
+						: undefined,
 				gain,
-				pan: panNode,
-				chop: chopNode,
+				pan: nodesChain.find(
+					(n) => n instanceof StereoPannerNode
+				) as StereoPannerNode,
+				chop: nodesChain.find(
+					(n) => n === (AudioProcessors as any).chopNode
+				),
 				chopInterval,
-				reverb: reverbNode,
-				filter: filterNode,
+				reverb: nodesChain.find(
+					(n) => n === (AudioProcessors as any).reverbNode
+				),
+				filter: nodesChain.find(
+					(n) => n instanceof BiquadFilterNode
+				) as BiquadFilterNode,
 			});
 		}
 	}
@@ -226,16 +438,29 @@ export class AudioManager {
 		const now = this.audioContext.currentTime;
 
 		this.activeNodes.forEach(
-			({ osc, gain, pan, chop, chopInterval, reverb, filter }) => {
+			({
+				osc,
+				source,
+				gain,
+				pan,
+				chop,
+				chopInterval,
+				reverb,
+				filter,
+			}) => {
 				try {
 					gain.gain.cancelScheduledValues(now);
 					if (pan) pan.pan.cancelScheduledValues(now);
 					if (filter) filter.frequency.cancelScheduledValues(now);
-					osc.frequency.cancelScheduledValues(now);
-
-					gain.gain.setValueAtTime(0, now);
-					osc.stop(now);
-					osc.disconnect();
+					if (osc) {
+						osc.frequency.cancelScheduledValues(now);
+						osc.stop(now);
+						osc.disconnect();
+					}
+					if (source) {
+						source.stop(now);
+						source.disconnect();
+					}
 					gain.disconnect();
 					if (pan) {
 						pan.pan.setValueAtTime(0, now);
@@ -257,6 +482,7 @@ export class AudioManager {
 		);
 
 		this.activeNodes = [];
+		this.buffers = {};
 		this.transitionManager.clear();
 		await this.audioContext.suspend();
 	}
@@ -292,8 +518,60 @@ export class AudioManager {
 	}
 
 	getTimers(): number[] {
-		return this.transitionManager.getActiveTimers(
-			this.audioContext?.currentTime || 0
+		if (!this.audioContext) return [];
+		const currentTime = this.audioContext.currentTime;
+		return this.transitionManager
+			.getActiveTimers(currentTime)
+			.filter((t) => t >= 0);
+	}
+
+	private async recordNode(
+		ctx: AudioContext,
+		node: SynthNode
+	): Promise<AudioBuffer> {
+		const duration =
+			typeof node.volume === "object" ? node.volume.duration : 20;
+		const offlineCtx = new OfflineAudioContext(
+			2,
+			ctx.sampleRate * duration,
+			ctx.sampleRate
 		);
+		let offlineSource: OscillatorNode | AudioBufferSourceNode;
+
+		if (node.type === "b" && node.buffer && this.buffers[node.buffer]) {
+			offlineSource = offlineCtx.createBufferSource();
+			offlineSource.buffer = this.buffers[node.buffer];
+		} else {
+			offlineSource = this.nodeFactory.createNode(offlineCtx, node);
+			if (!offlineSource)
+				throw new Error("Failed to create offline source");
+		}
+
+		const offlineGain = offlineCtx.createGain();
+		offlineSource.connect(offlineGain);
+		offlineGain.connect(offlineCtx.destination);
+
+		if (typeof node.volume === "object") {
+			const startVol = node.volume.start / 9;
+			const peakVol =
+				node.volume.middle !== undefined
+					? node.volume.middle / 9
+					: node.volume.end / 9;
+			const endVol = node.volume.end / 9;
+			this.transitionManager.schedule(
+				offlineGain.gain,
+				startVol,
+				endVol,
+				duration,
+				0,
+				peakVol
+			);
+		} else {
+			offlineGain.gain.value = (node.volume ?? 5) / 9;
+		}
+
+		offlineSource.start(0);
+		offlineSource.stop(duration);
+		return await offlineCtx.startRendering();
 	}
 }

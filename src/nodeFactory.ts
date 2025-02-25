@@ -1,13 +1,12 @@
 // /src/nodeFactory.ts
-// Factory Method: Creates audio nodes from parsed SYNO commands
-// Design Pattern: Factory Method - Maps AST node types to Web Audio nodes, delegates to generators
-
 import { SynthNode } from "./parser";
 import { createOscillator } from "./generators";
 
 export class NodeFactory {
-	createNode(ctx: AudioContext, node: SynthNode): OscillatorNode | null {
-		// Fix: No ? check—freq resolved in parser.ts
+	createNode(
+		ctx: AudioContext | OfflineAudioContext,
+		node: SynthNode
+	): OscillatorNode | null {
 		const freq =
 			typeof node.freq === "number"
 				? node.freq
@@ -23,6 +22,8 @@ export class NodeFactory {
 				return createOscillator(ctx, "sawtooth", freq);
 			case "q":
 				return createOscillator(ctx, "square", freq);
+			case "b": // Buffer type, no oscillator needed
+				return null;
 			default:
 				console.error(`Unknown generator type: ${node.type}`);
 				return null;
