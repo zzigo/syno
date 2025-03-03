@@ -1,0 +1,31 @@
+<!-- gray-noise-worklet.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Gray Noise Worklet</title>
+</head>
+<body>
+  <button onclick="toggleAudio()">Play/Pause Gray Noise</button>
+  <script>
+    let audioContext;
+    let noiseNode;
+
+    async function setupAudio() {
+      audioContext = new AudioContext();
+      await audioContext.audioWorklet.addModule('graynoiseproc.js');
+      noiseNode = new AudioWorkletNode(audioContext, 'gray-noise-processor');
+      noiseNode.connect(audioContext.destination);
+    }
+
+    function toggleAudio() {
+      if (!audioContext) {
+        setupAudio().then(() => audioContext.resume());
+      } else if (audioContext.state === 'running') {
+        audioContext.suspend();
+      } else {
+        audioContext.resume();
+      }
+    }
+  </script>
+</body>
+</html>
